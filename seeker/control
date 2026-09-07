@@ -1,0 +1,9 @@
+Package: com.hidenseek.seeker
+Name: Seeker
+Version: 0.1.0
+Architecture: iphoneos-arm64
+Description: Shows local jailbreak detection signals and their evidence.
+Maintainer: hideNseek
+Author: hideNseek
+Section: Utilities
+Depends: firmware (>= 18.0.1), uikittools

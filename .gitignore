@@ -1,0 +1,12 @@
+.gitignore
+.agents/
+.codex/
+agents/
+codex/
+AGENTS.md
+dev/theos/
+dev/downloads/
+dev/.check/
+seeker/.theos/
+seeker/packages/
+__pycache__/

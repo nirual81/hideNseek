@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+case "$1" in
+    remove|purge) /var/jb/usr/bin/uicache -u /var/jb/Applications/Seeker.app ;;
+esac
