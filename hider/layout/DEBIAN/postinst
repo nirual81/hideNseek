@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+if [ "${1:-}" = configure ]; then
+    # Dedicated mobile-owned data directory; never change shared directory ownership.
+    mkdir -p /var/jb/var/mobile/Library/Hider
+    chown 501:501 /var/jb/var/mobile/Library/Hider
+    chmod 755 /var/jb/var/mobile/Library/Hider
+fi

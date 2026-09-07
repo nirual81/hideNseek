@@ -10,3 +10,6 @@ dev/.check/
 seeker/.theos/
 seeker/packages/
 __pycache__/
+dev/allemande/
+hider/.theos/
+hider/packages/

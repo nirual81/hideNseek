@@ -1,4 +1,8 @@
-# Seeker
+# hideNseek
+
+Two iOS 18.0.1 rootless packages: **Seeker** reports local jailbreak detections; **Hider** selectively hides known filesystem paths inside apps you choose. Source lives in `seeker/` and `hider/`; development tools stay in this project's `dev/` directory.
+
+For the hiding tweak, see [Hider](#hider). The Seeker build and usage follow below.
 
 Seeker shows which local jailbreak detections fire, with the evidence from each check. It is a small Objective-C/UIKit app for **iOS 18.0.1 or later**, packaged as a rootless `.deb` for Dopamine 3 and Sileo.
 
@@ -110,3 +114,77 @@ Research started with Context7's Theos and iOS Security Suite documentation. Con
 - [RocketBootstrap service definitions](https://github.com/rpetrich/RocketBootstrap/blob/master/rocketbootstrap_internal.h)
 
 The app links only Apple's system libraries and frameworks. None of those research projects is an app dependency.
+
+## Hider
+
+Hider adds **Settings → Hider**, with a searchable list of system and user applications, including hidden app records returned by LaunchServices. Search by name or bundle ID, then tap an app to toggle its checkmark. All apps start disabled on a fresh install. **Disable all** clears the selection. Settings and SpringBoard remain visible in the list but cannot be enabled.
+
+Close and reopen a selected app after changing its setting. Pull to refresh the installed-app list. Selections are saved locally; Hider has no daemon, network service or telemetry. Native UIKit supplies the search bar and accessible table cells. Ponytail ultra kept the picker free of an extra app-list dependency; only ElleKit and PreferenceLoader are required on the device.
+
+### Build Hider
+
+Use the Linux prerequisites above, including a host C++20 compiler (`c++`, supplied by current Arch `base-devel` or Debian `build-essential`). Run from the project root:
+
+```sh
+bash dev/setup.sh
+make -C hider package
+python3 dev/check-hider.py
+```
+
+Output: `hider/packages/com.hidenseek.hider_0.1.0_iphoneos-arm64.deb`.
+
+Both the tweak and Settings bundle contain arm64 and arm64e slices, targeting iOS 18.0.1. The existing Linux toolchain emits old-ABI arm64e code. Setup builds the pinned [allemande converter](https://github.com/p0358/allemande) under `dev/`; packaging converts the staged binaries and signs them again. The linker's arm64e ABI warning is expected before this conversion. This is the Linux workaround documented by [Theos](https://theos.dev/docs/rootless), with no system-wide `oldabi` dependency. Its upstream author does not guarantee compatibility, so test on the target device before relying on this build.
+
+The check compiles and runs the shared path policy against boundaries, dot components, aliases and real symlinks. It inspects both package slices, iOS minimums, Settings registration, dependencies, arm64e Objective-C/CFString conversion fields and signed code-page hashes. These checks cannot verify injection or native Settings loading on Linux.
+
+For a clean rebuild, run `make -C hider clean` before the build command. Do not install the unconverted intermediate binaries from `.theos/obj`; install the `.deb`.
+
+### Install and recover
+
+Use a supported device already running Dopamine 3 on iOS 18.0.1. Install its compatible rootless **ElleKit** (`ellekit`) and **PreferenceLoader** (`preferenceloader`) through Sileo. ElleKit provides injection and the Substrate-compatible hook API; PreferenceLoader loads the Settings page. Hider does not install or configure the jailbreak itself.
+
+Transfer the `.deb` and install through Sileo where local-package opening is supported. Alternatively, using the same device-specific SSH settings as the Seeker instructions:
+
+```sh
+scp hider/packages/com.hidenseek.hider_0.1.0_iphoneos-arm64.deb mobile@IPHONE_IP:/var/mobile/
+ssh mobile@IPHONE_IP
+# On the device:
+sudo /var/jb/usr/bin/dpkg -i /var/mobile/com.hidenseek.hider_0.1.0_iphoneos-arm64.deb
+```
+
+If dependencies are missing, install them in Sileo and rerun the device command. Complete any restart requested by Sileo, then close and reopen Settings. Open **Hider**, select a test app and relaunch that app. If the page is missing, check PreferenceLoader and that injection is enabled for Settings. If hiding does not apply, check that Dopamine/Choicy or another injection manager allows Hider in that app. Disabling injection also disables Hider.
+
+To recover from an app failing to launch, uncheck it in Settings or use **Disable all**, then relaunch it. To remove the tweak, use Sileo or SSH:
+
+```sh
+sudo /var/jb/usr/bin/dpkg -r com.hidenseek.hider
+```
+
+Restart affected apps after removal; already-loaded hooks cannot be removed by deleting the package. If Settings itself cannot open, use SSH removal or the jailbreak's no-tweak recovery mode. Hider requests no automatic respring and installs no privileged helper.
+
+Installed files are under `/var/jb/usr/lib/TweakInject/`, `/var/jb/Library/PreferenceBundles/HiderPrefs.bundle/` and `/var/jb/Library/PreferenceLoader/Preferences/`. The installer creates only its own data directory, `/var/jb/var/mobile/Library/Hider`, owned by mobile (501:501). The app-ID array is `apps.plist` inside it. Selections survive upgrades and uninstall/reinstall; use **Disable all** to reset them. There is no `cfprefsd` preference-domain dependency.
+
+### What Hider covers
+
+The filesystem and symlink surfaces in [DETECTION.md](DETECTION.md) drive Hider's scope. Seeker continues to implement the document's 11 detection surfaces. Hider does not promise to conceal them all.
+
+| File view | Intercepted APIs |
+| --- | --- |
+| POSIX lookup and metadata | `access`, `stat`, `lstat`, `faccessat`, `fstatat`, `statfs`, `statvfs`, `getattrlist`, `getattrlistat` |
+| Opening and symlinks | `open`, `openat`, their exported `$NOCANCEL` variants, `fopen`, `opendir`, `readlink`, `readlinkat`, `realpath` |
+| Directory listings | `readdir`, `readdir_r`; Foundation directory/subpath arrays and lazy enumerators |
+| Foundation lookup | `NSFileManager` existence, access predicates, contents, item/filesystem attributes and symlink destination; `NSURL` reachability and resource values |
+
+Hidden POSIX lookups return `ENOENT`; Foundation lookups return false/nil with a no-such-file error where supported. Ordinary paths call the original implementation. The shared policy covers `/var/jb` and descendants, its resolved bootstrap location, `/private/var` and `/private/etc` aliases, `/var/.jbroot-*`, and fixed package-manager, injection, SSH/Frida and preference paths in [PathPolicy.h](hider/PathPolicy.h). It does not hide all of `/var`, `/Library`, `/private/preboot` or the user's files. Relative and directory-relative paths are resolved against the current directory or directory descriptor. Existing aliases and missing children beneath aliases are checked too.
+
+This is a userspace filter, not a filesystem permission boundary. Direct syscalls, raw `getdirentries`/`getattrlistbulk` buffers, alternate libc entry points, cached metadata, already-open descriptors and unhooked mutation APIs can still expose artifacts. Alias resolution can fail under sandbox restrictions or races; symlink-then-`..` paths are not fully virtualized. Root mount flags are unchanged. The fixed path list must be updated when bootstrap layouts change. Path checks may add filesystem work in selected apps.
+
+Hider does not hide URL handlers, LaunchServices registration, dyld images, Objective-C classes, injected code, signature/debug flags, sandbox escapes, `fork`, ports, environment variables or IPC. Its dylib and enumerator class are themselves detectable. ElleKit can load Hider into UIKit processes even when unselected, but the constructor installs filesystem hooks only for explicitly selected `.app` bundles. App extensions and daemons are not covered. Hiding paths may also prevent selected apps or their other tweaks from loading legitimate jailbreak resources.
+
+### Device validation still required
+
+No device was supplied. On supported hardware, first confirm Settings loads and search finds known system/user apps, then select Seeker and restart it. Compare `/var/jb` metadata, readlink/realpath and `/var` listings before/after; non-filesystem detections may remain FIRED. Confirm a normal app-container file remains accessible. Uncheck Seeker and restart it to confirm its original view returns. Also test saved selections after reopening Settings, the protected rows, Disable all and package removal. A successful cross-build is not a passed device test.
+
+### Hider research
+
+Context7 was queried first for Theos and ElleKit; no AltList library was found. Its snippets covered hook APIs and rootless packaging but omitted the required Settings/private-API and ABI-conversion details. Those gaps were checked against [Theos's rootless guidance](https://theos.dev/docs/rootless), [allemande](https://github.com/p0358/allemande), [AltList's LaunchServices implementation](https://github.com/opa334/AltList/blob/main/LSApplicationProxy%2BAltList.m), and the project-local Theos PreferenceLoader template. AltList is reference material, not a dependency. [ElleKit's packaging source](https://github.com/dhinakg/ellekit-builder/blob/main/build.sh) documents the Substrate framework compatibility link and rootless TweakInject location. [Dopamine's preference hooks](https://github.com/opa334/Dopamine/blob/3.x/BaseBin/rootlesshooks/cfprefsd.x) explain its preference redirection; Hider uses its own rootless data file.
