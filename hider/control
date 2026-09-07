@@ -1,8 +1,8 @@
 Package: com.hidenseek.hider
 Name: Hider
-Version: 0.1.1
+Version: 0.1.2
 Architecture: iphoneos-arm64
-Description: Per-app filesystem hiding with searchable Settings controls.
+Description: Per-app filesystem hiding; diagnostic build with private startup traces.
 Maintainer: hideNseek
 Author: hideNseek
 Section: Tweaks

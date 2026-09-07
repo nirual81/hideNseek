@@ -13,10 +13,21 @@
 #include <unistd.h>
 #import "Config.h"
 #include "PathPolicy.h"
+#include "StartupTrace.h"
 
 static char bootstrap[HS_PATH_MAX];
 static __thread unsigned resolving;
 static char *(*original_realpath)(const char *, char *);
+static int traceFD = -1;
+
+static void traceMessageHook(Class cls, SEL selector, IMP replacement, IMP *original) {
+    const char *name = sel_getName(selector);
+    HSWriteTrace(traceFD, "objc/before", name);
+    MSHookMessageEx(cls, selector, replacement, original);
+    HSWriteTrace(traceFD, original && *original ? "objc/after" : "objc/no-original", name);
+}
+// Include each Logos-installed method in the same startup trace.
+#define MSHookMessageEx traceMessageHook
 
 static bool hiddenAt(int directory, const char *path) {
     if (resolving || !path || !*path) return false;
@@ -276,11 +287,15 @@ static NSDirectoryEnumerator *filteredEnumerator(NSDirectoryEnumerator *inner, N
 static void hook(const char *name, void *replacement, void **original) {
     static void *patched[32];
     static size_t count;
+    HSWriteTrace(traceFD, "c/lookup", name);
     void *symbol = dlsym(RTLD_DEFAULT, name);
-    if (!symbol) return;
-    for (size_t i = 0; i < count; ++i) if (patched[i] == symbol) return;
-    if (count == sizeof patched / sizeof *patched) return;
+    if (!symbol) { HSWriteTrace(traceFD, "c/absent", name); return; }
+    for (size_t i = 0; i < count; ++i) if (patched[i] == symbol) { HSWriteTrace(traceFD, "c/alias", name); return; }
+    if (count == sizeof patched / sizeof *patched) { HSWriteTrace(traceFD, "c/full", name); return; }
+    void *previous = *original;
+    HSWriteTrace(traceFD, "c/before", name);
     MSHookFunction(symbol, replacement, original);
+    HSWriteTrace(traceFD, !*original ? "c/no-original" : *original == previous ? "c/unchanged-original" : "c/after", name);
     patched[count++] = symbol;
 }
 #define HOOK(name) hook(#name, (void *)replaced_##name, (void **)&original_##name)
@@ -290,9 +305,23 @@ static void hook(const char *name, void *replacement, void **original) {
         NSString *identifier = NSBundle.mainBundle.bundleIdentifier;
         if (!identifier || HSProtectedApp(identifier) || ![NSBundle.mainBundle.bundlePath.pathExtension isEqualToString:@"app"]) return;
         if (![HSReadApps(NULL) containsObject:identifier]) return;
+        NSString *caches = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+        if (caches.length) [NSFileManager.defaultManager createDirectoryAtPath:caches withIntermediateDirectories:YES attributes:nil error:nil];
+        char tracePath[HS_PATH_MAX];
+        const char *cachePath = caches.fileSystemRepresentation;
+        if (cachePath && snprintf(tracePath, sizeof tracePath, "%s/Hider-startup-XXXXXX", cachePath) < (int)sizeof tracePath)
+            traceFD = HSOpenTrace(tracePath);
+        HSWriteTrace(traceFD, "version", "Hider 0.1.2 diagnostic");
+#if __arm64e__
+        HSWriteTrace(traceFD, "architecture", "arm64e");
+#else
+        HSWriteTrace(traceFD, "architecture", "arm64");
+#endif
+        HSWriteTrace(traceFD, "bootstrap/before", "realpath");
         original_realpath = realpath;
         char resolvedRoot[HS_PATH_MAX];
         if (realpath("/var/jb", resolvedRoot)) snprintf(bootstrap, sizeof bootstrap, "%s", resolvedRoot);
+        HSWriteTrace(traceFD, "bootstrap/after", "realpath");
         HOOK(access); HOOK(stat); HOOK(lstat); HOOK(statfs); HOOK(statvfs);
         HOOK(faccessat); HOOK(fstatat); HOOK(getattrlist); HOOK(getattrlistat);
         HOOK(open); HOOK(openat); HOOK(fopen); HOOK(opendir);
@@ -300,5 +329,24 @@ static void hook(const char *name, void *replacement, void **original) {
         hook("openat$NOCANCEL", (void *)replaced_openat_nocancel, (void **)&original_openat_nocancel);
         HOOK(readdir); HOOK(readdir_r); HOOK(readlink); HOOK(readlinkat); HOOK(realpath);
         %init(Filesystem);
+        HSWriteTrace(traceFD, "hooks/installed", "starting read-only checks");
+        HSWriteTrace(traceFD, "probe/before", "access-root");
+        errno = 0;
+        int status = access("/", F_OK), failure = errno;
+        char result[80];
+        snprintf(result, sizeof result, "access-root result=%d errno=%d", status, failure);
+        HSWriteTrace(traceFD, "probe/after", result);
+        HSWriteTrace(traceFD, "probe/before", "access-var-jb");
+        errno = 0;
+        status = access("/var/jb", F_OK); failure = errno;
+        snprintf(result, sizeof result, "access-var-jb result=%d errno=%d", status, failure);
+        HSWriteTrace(traceFD, "probe/after", result);
+        HSWriteTrace(traceFD, "constructor/returning", "waiting for main queue");
+        int fd = traceFD;
+        traceFD = -1;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            HSWriteTrace(fd, "main-queue/reached", "not a full app health check");
+            if (fd >= 0) close(fd);
+        });
     }
 }

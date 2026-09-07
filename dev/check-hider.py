@@ -151,6 +151,8 @@ for name in ("usr/lib/TweakInject/Hider.dylib", "Library/PreferenceBundles/Hider
     assert "Swift" not in linked and "oldabi" not in linked
     if name.endswith("Hider.dylib"):
         assert "@rpath/CydiaSubstrate.framework/CydiaSubstrate" in linked
+        for marker in (f"Hider {version} diagnostic", "Hider-startup-XXXXXX", "c/before", "objc/before", "access-var-jb", "main-queue/reached"):
+            assert marker.encode() in fat, f"Missing startup trace marker: {marker}"
 
 print(f"Hider {version} package passed: arm64 + native arm64e ABI, authenticated class RO metadata, iOS 18.0.1, rootless layout, Settings entry, dependencies and signature page hashes ({package.stat().st_size:,} bytes).")
-print("Device injection, Settings loading, sandbox access and hook behavior remain untested.")
+print("User confirmed Settings loads in 0.1.1; selected-app crashes remain unresolved. This diagnostic build needs a device trace.")

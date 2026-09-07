@@ -125,6 +125,8 @@ Close and reopen a selected app after changing its setting. Pull to refresh the 
 
 ### Build Hider
 
+The current package, **0.1.2, is a diagnostic build** for a selected-app startup crash. It is not a confirmed crash fix. Use Seeker for this test and leave PayPal unchecked; see [Collect the startup trace](#collect-the-startup-trace).
+
 Use the Linux prerequisites above and **Clang 22** (tested with 22.1.8). `dev/hider-clang.sh` uses `/usr/bin/clang` by default and rejects other major versions. If Clang 22 is installed elsewhere, set its absolute path before setup and build, for example:
 
 ```sh
@@ -139,17 +141,29 @@ make -C hider package
 python3 dev/check-hider.py
 ```
 
-Output: `hider/packages/com.hidenseek.hider_0.1.1_iphoneos-arm64.deb`.
+Output: `hider/packages/com.hidenseek.hider_0.1.2_iphoneos-arm64.deb`.
 
 Both the tweak and Settings bundle contain arm64 and arm64e slices, targeting iOS 18.0.1. Clang 22 emits native arm64e metadata. The build retains the project-local Theos SDK 16.5, ld64 linker and signing tools; it no longer uses allemande conversion or needs a system-wide `oldabi` package. The Makefile explicitly selects the cross-linker and new-ABI static libraries. DWARF 4 debug information keeps the bundled debug-symbol tool compatible. A clean build should produce no legacy-ABI or debug-attribute warnings.
 
-The check compiles and runs the shared path policy against boundaries, dot components, aliases and real symlinks. It inspects both package slices, iOS minimums, Settings registration, dependencies, the versioned arm64e ABI header, authenticated Objective-C class read-only-data/isa/superclass and CFString pointers, and signed code-page hashes. These checks cannot verify injection or native Settings loading on Linux.
+The check compiles and runs the shared path policy against boundaries, dot components, aliases and real symlinks. It tests diagnostic-file creation, private permissions, descriptor flags, checkpoint contents and errno preservation. It also inspects both package slices, iOS minimums, Settings registration, dependencies, the versioned arm64e ABI header, authenticated Objective-C class read-only-data/isa/superclass and CFString pointers, and signed code-page hashes. These checks cannot run the hooks on Linux.
 
 When upgrading the build tools from 0.1.0, run `make -C hider clean` before the build command to discard old objects. Install the `.deb`, not intermediate binaries from `.theos/obj`.
 
 ### Settings crash reported in 0.1.0
 
-The reported device is an iPhone 11 Pro Max on iOS 18.0.1, Dopamine 3.0.9, ElleKit 1.2 and PreferenceLoader 2.2.8. Tapping Hider reportedly closes Settings before any transition, with no crash log found. Inspection of 0.1.0 found a legacy arm64e ABI header and unauthenticated class read-only-data pointers left by partial conversion. The earlier check missed those fields. Version 0.1.1 replaces that build path; the strengthened check rejects 0.1.0 and passes 0.1.1. The Settings source is unchanged. This is a build correction, not confirmation of the device crash's exact cause or a successful device retest.
+The reported device is an iPhone 11 Pro Max on iOS 18.0.1, Dopamine 3.0.9, ElleKit 1.2 and PreferenceLoader 2.2.8. Version 0.1.0 closed Settings before any transition. Inspection found a legacy arm64e ABI header and unauthenticated class read-only-data pointers left by partial conversion. The earlier check missed those fields. Version 0.1.1 replaced that build path; the strengthened check rejects 0.1.0 and passes later builds. The user confirmed that **0.1.1 fixed the Settings page**. No crash stack was supplied, so the precise runtime failure remains unconfirmed.
+
+### Collect the startup trace
+
+With 0.1.1, the user reports that selected PayPal and Seeker apps crash immediately. Seeker launches normally after unchecking it. The installed version was confirmed in Sileo. No usable iOS crash report was found. Version 0.1.2 adds checkpoints without changing the hiding policy or hook order.
+
+Install 0.1.2 using the instructions below. Leave PayPal unchecked. Select Seeker in Hider, force-close Seeker from the app switcher, then launch it once. After the crash, uncheck Seeker to restore normal launching.
+
+Using a file browser or SSH with access to Seeker's **data container**, open `Library/Caches` and copy the newest file whose name starts with `Hider-startup-`. This is not Seeker's `.app` installation directory. For a normally containerized launch, the full path is `/var/mobile/Containers/Data/Application/<Seeker-data-UUID>/Library/Caches/Hider-startup-<random>`. The cache path is obtained from Foundation at runtime; the UUID is device-specific. Send the file's contents, or report that no file was created.
+
+Each selected launch creates a new file exclusively, with mode 0600. It contains the diagnostic version, loaded architecture, C symbol/Objective-C selector checkpoints and results from read-only `access` checks on `/` and `/var/jb`. It does not collect account data, app content or ongoing filesystem activity, and nothing is uploaded. Writes use a descriptor opened before hooking, so hiding the pathname later does not prevent checkpoint writes. The descriptor closes when the main-queue checkpoint runs or the process exits. File creation and writes are best-effort; a missing file does not prove hooks were disabled.
+
+A final `c/before` or `objc/before` line identifies an installation call with no recorded completion. `probe/before` without its matching `probe/after` narrows the investigation to that filesystem call or concurrent activity. `main-queue/reached` only confirms startup got that far, not that the app is healthy. Do not infer an exact faulting instruction from a checkpoint alone. Trace files remain in the cache until removed by the user, app or OS; this diagnostic build creates one per selected launch. Remove the tracing code after isolating the failure.
 
 ### Install and recover
 
@@ -158,13 +172,13 @@ Use a supported device already running Dopamine 3 on iOS 18.0.1. Install its com
 Transfer the `.deb` and install through Sileo where local-package opening is supported. Alternatively, using the same device-specific SSH settings as the Seeker instructions:
 
 ```sh
-scp hider/packages/com.hidenseek.hider_0.1.1_iphoneos-arm64.deb mobile@IPHONE_IP:/var/mobile/
+scp hider/packages/com.hidenseek.hider_0.1.2_iphoneos-arm64.deb mobile@IPHONE_IP:/var/mobile/
 ssh mobile@IPHONE_IP
 # On the device:
-sudo /var/jb/usr/bin/dpkg -i /var/mobile/com.hidenseek.hider_0.1.1_iphoneos-arm64.deb
+sudo /var/jb/usr/bin/dpkg -i /var/mobile/com.hidenseek.hider_0.1.2_iphoneos-arm64.deb
 ```
 
-Install 0.1.1 over 0.1.0; saved selections remain intact. If dependencies are missing, install them in Sileo and rerun the device command. Complete any restart requested by Sileo, then **force-close Settings from the app switcher and reopen it** so it cannot reuse the old loaded bundle. Open **Hider**, select a test app and relaunch that app. If the page is missing, check PreferenceLoader and that injection is enabled for Settings. If hiding does not apply, check that Dopamine/Choicy or another injection manager allows Hider in that app. Disabling injection also disables Hider.
+Install 0.1.2 over the existing version; saved selections remain intact. If dependencies are missing, install them in Sileo and rerun the device command. Complete any restart requested by Sileo, then **force-close Settings from the app switcher and reopen it** so it cannot reuse the old loaded bundle. Force-close affected apps too, since an upgrade does not unload their old dylib. For this diagnostic build, follow the Seeker-only trace procedure above. If the page is missing, check PreferenceLoader and that injection is enabled for Settings. If hiding does not apply, check that Dopamine/Choicy or another injection manager allows Hider in that app. Disabling injection also disables Hider. Changing the selection itself needs an app relaunch, not a respring.
 
 To recover from an app failing to launch, uncheck it in Settings or use **Disable all**, then relaunch it. To remove the tweak, use Sileo or SSH:
 
@@ -195,10 +209,12 @@ Hider does not hide URL handlers, LaunchServices registration, dyld images, Obje
 
 ### Device validation still required
 
-No device access was supplied; 0.1.1 has passed host checks only. On the reported phone, first confirm Settings loads and search finds known system/user apps, then select Seeker and restart it. Compare `/var/jb` metadata, readlink/realpath and `/var` listings before/after; non-filesystem detections may remain FIRED. Confirm a normal app-container file remains accessible. Uncheck Seeker and restart it to confirm its original view returns. Also test saved selections after reopening Settings, the protected rows, Disable all and package removal. A successful cross-build is not a passed device test.
+No device access was supplied to the agent. The user confirmed Settings works in 0.1.1, but selected apps crash. Version 0.1.2 has passed host checks only; collect its trace first. After startup is fixed, compare Seeker's `/var/jb` metadata, readlink/realpath and `/var` listings before/after; non-filesystem detections may remain FIRED. Confirm a normal app-container file remains accessible. Uncheck Seeker and restart it to confirm its original view returns. Also test search, saved selections after reopening Settings, the protected rows, Disable all and package removal. A successful cross-build is not a passed device test.
 
 ### Hider research
 
 Context7 was queried first for Theos and ElleKit; no AltList library was found. Its snippets covered hook APIs and rootless packaging but omitted the required Settings/private-API and ABI-conversion details. Those gaps were checked against [Theos's rootless guidance](https://theos.dev/docs/rootless), [allemande](https://github.com/p0358/allemande), [AltList's LaunchServices implementation](https://github.com/opa334/AltList/blob/main/LSApplicationProxy%2BAltList.m), and the project-local Theos PreferenceLoader template. AltList is reference material, not a dependency. [ElleKit's packaging source](https://github.com/dhinakg/ellekit-builder/blob/main/build.sh) documents the Substrate framework compatibility link and rootless TweakInject location. [Dopamine's preference hooks](https://github.com/opa334/Dopamine/blob/3.x/BaseBin/rootlesshooks/cfprefsd.x) explain its preference redirection; Hider uses its own rootless data file.
 
 For the 0.1.0 crash investigation, Context7's Theos results again lacked current Linux compiler details. [LLVM's pointer-authentication documentation](https://clang.llvm.org/docs/PointerAuthentication.html) describes the signed class read-only-data pointer checked in 0.1.1. The compiler/linker combination was tested locally against the packaged binaries; this does not establish device compatibility by itself.
+
+For the selected-app crash, Context7's ElleKit snippets described the hook API but did not establish 1.2/iOS 18 behavior. Upstream [Substrate wrappers](https://github.com/tealbathingsuit/ellekit/blob/main/ellekit/API/MobileSubstrate.swift), [C hooking](https://github.com/tealbathingsuit/ellekit/blob/main/ellekit/Languages/C/Hook.swift) and [Objective-C hooking](https://github.com/tealbathingsuit/ellekit/blob/main/ellekit/Languages/Objective-C.swift) were inspected for the gaps. Those are main-branch references, not a verified match to the user's installed ElleKit 1.2 binary; no dependency upgrade or hook-engine change is prescribed from them.
