@@ -13,10 +13,11 @@ check = root / "dev/.check"
 check.mkdir(exist_ok=True)
 subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", str(root / "dev/check-hider.c"), "-o", str(check / "check-hider")], check=True)
 subprocess.run([str(check / "check-hider")], check=True)
-for script in ("dev/setup.sh", "dev/convert-hider.sh", "hider/layout/DEBIAN/postinst"):
+for script in ("dev/setup.sh", "dev/hider-clang.sh", "hider/layout/DEBIAN/postinst"):
     subprocess.run(["bash", "-n", str(root / script)], check=True)
 
-package = root / "hider/packages/com.hidenseek.hider_0.1.0_iphoneos-arm64.deb"
+version = next(line.split(": ", 1)[1] for line in (root / "hider/control").read_text().splitlines() if line.startswith("Version: "))
+package = root / f"hider/packages/com.hidenseek.hider_{version}_iphoneos-arm64.deb"
 assert package.is_file(), "Build first: make -C hider package"
 def member(name):
     return subprocess.check_output(["ar", "p", str(package), name])
@@ -26,6 +27,7 @@ with tarfile.open(fileobj=io.BytesIO(member("control.tar.gz"))) as archive:
     files = {entry.name.removeprefix("./"): entry for entry in archive.getmembers()}
     control = archive.extractfile(files["control"]).read().decode()
     assert "Package: com.hidenseek.hider\n" in control
+    assert f"Version: {version}\n" in control
     assert "Architecture: iphoneos-arm64\n" in control
     assert "Depends: firmware (>= 18.0.1), ellekit, preferenceloader\n" in control
     script = files["postinst"]
@@ -46,6 +48,7 @@ with tarfile.open(fileobj=io.BytesIO(member("data.tar.xz"))) as archive:
     payload = {name.removeprefix(prefix): archive.extractfile(entry).read() for name, entry in files.items()}
     info = plistlib.loads(payload["Library/PreferenceBundles/HiderPrefs.bundle/Info.plist"])
     assert info["MinimumOSVersion"] == "18.0.1"
+    assert info["CFBundleShortVersionString"] == version
     assert info["NSPrincipalClass"] == "HSSettingsController"
     assert info["CFBundleIdentifier"] == "com.hidenseek.hider.preferences"
     entry = plistlib.loads(payload["Library/PreferenceLoader/Preferences/Hider.plist"])["entry"]
@@ -69,9 +72,14 @@ def verify_signature(binary, signature):
         assert slots == (limit + page - 1) // page
         for slot in range(slots):
             digest = hashlib.new(algorithm, binary[slot * page:min((slot + 1) * page, limit)]).digest()[:size]
-            assert digest == cd[hash_offset + slot * size:hash_offset + (slot + 1) * size], "Invalid code signature after ABI conversion"
+            assert digest == cd[hash_offset + slot * size:hash_offset + (slot + 1) * size], "Invalid code signature"
         directories += 1
     assert directories
+
+def verify_auth(pointer, discriminator):
+    # dyld arm64e authenticated pointer: DA key, address diversity and type salt.
+    assert pointer >> 63 == 1 and (pointer >> 49) & 3 == 2 and (pointer >> 48) & 1 == 1
+    assert (pointer >> 32) & 0xFFFF == discriminator, f"Missing pointer authentication discriminator {discriminator:#x}"
 
 tools = root / "dev/theos/toolchain/linux/iphone/bin"
 for name in ("usr/lib/TweakInject/Hider.dylib", "Library/PreferenceBundles/HiderPrefs.bundle/HiderPrefs"):
@@ -82,19 +90,22 @@ for name in ("usr/lib/TweakInject/Hider.dylib", "Library/PreferenceBundles/Hider
     for index in range(count):
         cpu, subtype, offset, size, _ = struct.unpack_from(">5I", fat, 8 + index * 20)
         assert cpu == 0x100000C and offset + size <= len(fat)
+        raw_subtype = subtype
         subtype &= 0xFFFFFF
         architectures.add(subtype)
         binary = fat[offset:offset + size]
         header = struct.unpack_from("<8I", binary)
         assert header[0] == 0xFEEDFACF and header[1] == cpu
+        if subtype == 2:
+            assert raw_subtype == header[2] == 0x80000002, "Legacy/unversioned arm64e ABI; rebuild with the native-ABI compiler, not allemande"
         position = 32
         minimum = signed = classes = strings = False
         for _ in range(header[4]):
             command, length = struct.unpack_from("<II", binary, position)
             assert length >= 8 and position + length <= len(binary)
             if command == 0x32:  # LC_BUILD_VERSION
-                platform, version = struct.unpack_from("<II", binary, position + 8)
-                assert platform == 2 and version == (18 << 16 | 1)
+                platform, minimum_os = struct.unpack_from("<II", binary, position + 8)
+                assert platform == 2 and minimum_os == (18 << 16 | 1)
                 minimum = True
             if command == 0x1D:  # LC_CODE_SIGNATURE
                 start, length_sig = struct.unpack_from("<II", binary, position + 8)
@@ -107,20 +118,24 @@ for name in ("usr/lib/TweakInject/Hider.dylib", "Library/PreferenceBundles/Hider
                     section_name = binary[at:at + 16].split(b"\0")[0]
                     section_size, file_offset = struct.unpack_from("<QI", binary, at + 40)
                     if section_name == b"__objc_data":
+                        assert section_size and section_size % 40 == 0
                         for at in range(file_offset, file_offset + section_size, 40):
                             isa, superclass = struct.unpack_from("<QQ", binary, at)
-                            assert isa & 0x800D6AE100000000 == 0x800D6AE100000000
-                            assert superclass & 0xC00DB5AB00000000 == 0xC00DB5AB00000000
+                            verify_auth(isa, 0x6AE1)
+                            verify_auth(superclass, 0xB5AB)
+                            ro_pointer = struct.unpack_from("<Q", binary, at + 32)[0]
+                            verify_auth(ro_pointer, 0x61F8)
                         classes = True
                     if section_name == b"__cfstring":
+                        assert section_size and section_size % 32 == 0
                         for at in range(file_offset, file_offset + section_size, 32):
                             isa = struct.unpack_from("<Q", binary, at)[0]
-                            assert isa & 0xC0156AE100000000 == 0xC0156AE100000000
+                            verify_auth(isa, 0x6AE1)
                         strings = True
             position += length
         assert minimum and signed
         if subtype == 2:
-            assert classes and strings, "Expected converted Objective-C / CFString data"
+            assert classes and strings, "Expected native authenticated Objective-C / CFString data"
     assert architectures == {0, 2}
     output = check / pathlib.Path(name).name
     output.write_bytes(fat)
@@ -137,5 +152,5 @@ for name in ("usr/lib/TweakInject/Hider.dylib", "Library/PreferenceBundles/Hider
     if name.endswith("Hider.dylib"):
         assert "@rpath/CydiaSubstrate.framework/CydiaSubstrate" in linked
 
-print(f"Hider package passed: arm64 + converted arm64e, iOS 18.0.1, rootless layout, Settings entry, dependencies and signature page hashes ({package.stat().st_size:,} bytes).")
+print(f"Hider {version} package passed: arm64 + native arm64e ABI, authenticated class RO metadata, iOS 18.0.1, rootless layout, Settings entry, dependencies and signature page hashes ({package.stat().st_size:,} bytes).")
 print("Device injection, Settings loading, sandbox access and hook behavior remain untested.")

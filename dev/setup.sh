@@ -2,7 +2,7 @@
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 [[ $(uname -sm) == 'Linux x86_64' ]] || { echo 'Setup supports x86_64 Linux.' >&2; exit 1; }
-for cmd in curl git make perl rsync fakeroot tar xz sha256sum python3 cc c++; do
+for cmd in curl git make perl rsync fakeroot tar xz sha256sum python3 cc; do
     command -v "$cmd" >/dev/null || { echo "Missing host prerequisite: $cmd (see README.md)" >&2; exit 1; }
 done
 theos_commit=5280bd038207e14f8bd76f5417aa2fe641c03228
@@ -33,12 +33,6 @@ if [[ ! -f theos/sdks/.seeker-ready ]]; then
     tar -xJf downloads/iPhoneOS16.5.sdk.tar.xz -C theos/sdks
     touch theos/sdks/.seeker-ready
 fi
-allemande_commit=43b2ca59ad3f6a55735b1f7b5cba8c34b55bd8f9
-if [[ ! -d allemande/.git ]]; then
-    git clone --no-checkout https://github.com/p0358/allemande.git allemande
-    git -C allemande checkout --detach "$allemande_commit"
-fi
-[[ $(git -C allemande rev-parse HEAD) == "$allemande_commit" ]] || { echo 'Unexpected allemande revision; see AGENTS.md.' >&2; exit 1; }
-c++ -std=c++20 -O2 -o allemande/allemande allemande/main.cpp
+bash hider-clang.sh --version
 theos/toolchain/linux/iphone/bin/clang --version
 echo 'Ready. Build with: make -C seeker package or make -C hider package'
