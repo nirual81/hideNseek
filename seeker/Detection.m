@@ -268,7 +268,7 @@ static void Signing(NSMutableArray *rows) {
     NSMutableArray *hits = [NSMutableArray array];
     if (rc == 0) {
         if (!(flags & 0x1)) [hits addObject:@"CS_VALID is unset."];
-        if (flags & 0x2) [hits addObject:@"CS_ADHOC: expected for this Sileo package."];
+        if (flags & 0x2) [hits addObject:@"CS_ADHOC: ad hoc signature (expected for the Sileo build)."];
         if (flags & 0x4) [hits addObject:@"CS_GET_TASK_ALLOW: debugger access allowed."];
         if (flags & 0x04000000) [hits addObject:@"CS_PLATFORM_BINARY: platform status."];
         if (flags & 0x10000000) [hits addObject:@"CS_DEBUGGED: code signing state relaxed by debugging."];

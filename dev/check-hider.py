@@ -155,4 +155,4 @@ for name in ("usr/lib/TweakInject/Hider.dylib", "Library/PreferenceBundles/Hider
             assert marker.encode() in fat, f"Missing startup trace marker: {marker}"
 
 print(f"Hider {version} package passed: arm64 + native arm64e ABI, authenticated class RO metadata, iOS 18.0.1, rootless layout, Settings entry, dependencies and signature page hashes ({package.stat().st_size:,} bytes).")
-print("User confirmed Settings loads in 0.1.1; selected-app crashes remain unresolved. This diagnostic build needs a device trace.")
+print("User confirmed Settings loads in 0.1.1; the supplied 0.1.2 trace shows the access probe hides /var/jb. Selected-app startup remains unresolved.")

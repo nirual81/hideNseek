@@ -64,7 +64,7 @@
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void)tableView; (void)section;
-    return [NSString stringWithFormat:@"iOS %@ · Seeker 0.1.0\nResults describe this app's process. Its rootless installation and ad hoc signature can fire checks. Debuggers, JIT and open ports can have legitimate uses. NOT OBSERVED does not prove a stock device.", UIDevice.currentDevice.systemVersion];
+    return [NSString stringWithFormat:@"iOS %@ · Seeker 0.1.0\nResults describe this app's process. A rootless install or ad hoc signature can fire checks. Debuggers, JIT and open ports can have legitimate uses. NOT OBSERVED does not prove a stock device.", UIDevice.currentDevice.systemVersion];
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Result"];

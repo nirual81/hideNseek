@@ -1,8 +1,10 @@
 # hideNseek
 
-Two iOS 18.0.1 rootless packages: **Seeker** reports local jailbreak detections; **Hider** selectively hides known filesystem paths inside apps you choose. Source lives in `seeker/` and `hider/`; development tools stay in this project's `dev/` directory.
+**Seeker** reports local jailbreak detections and builds as either a sideloadable IPA or a rootless `.deb`. **Hider** selectively hides known filesystem paths inside apps you choose and remains a jailbreak tweak. Both target iOS 18.0.1. Source lives in `seeker/` and `hider/`; development tools stay in this project's `dev/` directory.
 
 For the hiding tweak, see [Hider](#hider). The Seeker build and usage follow below.
+
+To install Seeker without Sileo, see [Build and sideload Seeker's IPA](#build-and-sideload-seekers-ipa).
 
 Seeker shows which local jailbreak detections fire, with the evidence from each check. It is a small Objective-C/UIKit app for **iOS 18.0.1 or later**, packaged as a rootless `.deb` for Dopamine 3 and Sileo.
 
@@ -16,10 +18,10 @@ On this project's original Arch/Omarchy host, all host prerequisites were alread
 
 ```sh
 # Arch / Omarchy, only if needed:
-sudo pacman -S --needed base-devel git curl perl rsync fakeroot xz python libbsd openssl ncurses
+sudo pacman -S --needed base-devel git curl perl rsync fakeroot xz zip python libbsd openssl ncurses
 
 # Debian / Ubuntu alternative:
-sudo apt install build-essential git curl perl rsync fakeroot xz-utils python3 libbsd0 libtinfo6 libuuid1 zlib1g
+sudo apt install build-essential git curl perl rsync fakeroot xz-utils zip python3 libbsd0 libtinfo6 libuuid1 zlib1g
 ```
 
 The shared setup also checks for **Clang 22**, Hider's compiler. It was already installed on this host and is not downloaded by setup. See [Build Hider](#build-hider) to select its path. Seeker itself still uses the downloaded Clang 11 toolchain.
@@ -78,6 +80,32 @@ sudo /var/jb/usr/bin/dpkg -r com.hidenseek.seeker
 ```
 
 No device was connected during development. The cross-build and host checks are verified separately from installation and runtime behavior.
+
+## Build and sideload Seeker's IPA
+
+The IPA contains the same Seeker app and 37 checks. It has no Hider injection code, Debian installer scripts or jailbreak-only entitlements. It can be signed and installed without an active jailbreak. Hider itself cannot be installed as a standalone IPA and still requires Dopamine/ElleKit.
+
+After the shared setup above, run from the project root:
+
+```sh
+make -C seeker package PACKAGE_FORMAT=ipa
+python3 dev/check.py --ipa
+```
+
+Output: `seeker/packages/com.hidenseek.seeker_0.1.0.ipa`. The argument is `PACKAGE_FORMAT=ipa`, not `THEOS_PACKAGE_FORMAT=ipa`. Theos's existing IPA packager uses the host `zip` command; no additional packaging tool is needed. IPA objects and staging live under `seeker/.theos/ipa`, separate from the default rootless build. To clean just this build, use `make -C seeker clean PACKAGE_FORMAT=ipa`. Omitting `PACKAGE_FORMAT=ipa` still builds the Sileo `.deb`.
+
+This is input for a **sideload signer**, not an already provisioned installation. The binary has only a local ad hoc signature, with no Apple certificate, provisioning profile or account entitlements. Your signing tool must sign the app and supply a matching profile for your device. Apple's [ad hoc provisioning instructions](https://developer.apple.com/help/account/provisioning-profiles/create-an-ad-hoc-provisioning-profile/) describe the certificate, App ID and registered-device requirements; that distribution workflow is different from the local ad hoc signature used by the Linux build. No account, certificate or device was configured here.
+
+To install and test:
+
+1. Uncheck Seeker in Hider. The IPA uses `com.hidenseek.seeker`, the same bundle ID as the `.deb`. Remove only the **Seeker** package in Sileo before sideloading to avoid that conflict. Keep Hider installed. Alternatively, if your signer supports changing the bundle ID, use a distinct ID for side-by-side installation.
+2. Import the `.ipa` into your IPA signing/sideload tool. Complete its signing and installation flow using your own account or certificate/profile. Follow any device trust or Developer Mode prompts. Opening this unprovisioned archive in Files alone does not install it.
+3. Launch the sideloaded Seeker with Hider disabled for it first. Confirm it scans normally. On a non-jailbroken launch, restricted/private checks may report UNAVAILABLE; that is expected behavior, not an installation error.
+4. With Dopamine active, open Settings → Hider, pull to refresh and select the sideloaded Seeker's **actual bundle ID**. A signer may change the ID, so the old selection may not match. Allow tweak injection for that app, fully close it, then launch it again. No respring is needed just for the selection change.
+
+A normal sideload puts Seeker in an app installation container outside `/var/jb/Applications`. This removes the known conflict where Hider's path policy hides the Sileo copy's own app bundle. It is a diagnostic comparison, not a confirmed fix for the selected-app crash. If the sideloaded copy also crashes, uncheck it and retrieve its newest startup trace from its data container as described below. Keep PayPal unchecked during this test.
+
+The IPA check validates archive CRCs and the exact `Payload/Seeker.app` contents, executable permissions, arm64, iOS 18.0.1 minimum, signature presence, empty entitlements and system-only dependencies. It rejects rootless load paths and extra payload files. It cannot validate your later signing/provisioning or run the app on iOS.
 
 ## Detections
 
@@ -157,6 +185,10 @@ The reported device is an iPhone 11 Pro Max on iOS 18.0.1, Dopamine 3.0.9, ElleK
 
 With 0.1.1, the user reports that selected PayPal and Seeker apps crash immediately. Seeker launches normally after unchecking it. The installed version was confirmed in Sileo. No usable iOS crash report was found. Version 0.1.2 adds checkpoints without changing the hiding policy or hook order.
 
+The supplied 0.1.2 trace records all 20 C and 19 Objective-C installation returns. Its `access("/", F_OK)` succeeds, while `access("/var/jb", F_OK)` returns `-1` with `errno=2` (ENOENT). It stops at `constructor/returning`, before the main-queue checkpoint. That marker precedes dispatch scheduling and autorelease-pool cleanup; it does not prove the constructor returned or identify a faulting instruction. The next comparison is the [sideloaded Seeker IPA](#build-and-sideload-seekers-ipa), outside the hidden bootstrap tree. Hider remains at 0.1.2; no further diagnostic revision or crash fix has been applied.
+
+A second trace, explicitly collected from PayPal, has the same checkpoints and results. Hiding Seeker's own rootless app bundle cannot explain the PayPal failure on its own. The IPA comparison remains useful, but does not establish that changing Seeker's installation location fixes the shared startup problem.
+
 Install 0.1.2 using the instructions below. Leave PayPal unchecked. Select Seeker in Hider, force-close Seeker from the app switcher, then launch it once. After the crash, uncheck Seeker to restore normal launching.
 
 Using a file browser or SSH with access to Seeker's **data container**, open `Library/Caches` and copy the newest file whose name starts with `Hider-startup-`. This is not Seeker's `.app` installation directory. For a normally containerized launch, the full path is `/var/mobile/Containers/Data/Application/<Seeker-data-UUID>/Library/Caches/Hider-startup-<random>`. The cache path is obtained from Foundation at runtime; the UUID is device-specific. Send the file's contents, or report that no file was created.
@@ -209,7 +241,7 @@ Hider does not hide URL handlers, LaunchServices registration, dyld images, Obje
 
 ### Device validation still required
 
-No device access was supplied to the agent. The user confirmed Settings works in 0.1.1, but selected apps crash. Version 0.1.2 has passed host checks only; collect its trace first. After startup is fixed, compare Seeker's `/var/jb` metadata, readlink/realpath and `/var` listings before/after; non-filesystem detections may remain FIRED. Confirm a normal app-container file remains accessible. Uncheck Seeker and restart it to confirm its original view returns. Also test search, saved selections after reopening Settings, the protected rows, Disable all and package removal. A successful cross-build is not a passed device test.
+No device access was supplied to the agent. The user confirmed Settings works in 0.1.1, but selected apps crash. The supplied 0.1.2 trace confirms its access probe hides `/var/jb`; full startup remains unverified. Test the sideloaded Seeker first. After startup is fixed, compare Seeker's `/var/jb` metadata, readlink/realpath and `/var` listings before/after; non-filesystem detections may remain FIRED. Confirm a normal app-container file remains accessible. Uncheck Seeker and restart it to confirm its original view returns. Also test search, saved selections after reopening Settings, the protected rows, Disable all and package removal. A successful cross-build is not a passed device test.
 
 ### Hider research
 
